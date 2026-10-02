@@ -1,9 +1,9 @@
 export type AgentStep = { id: string; title: string; tool: string; detail: string; count: number; status: "complete" };
 export type InputRow = Record<string, string>;
 export type OrderRow = { purchaseRef: string; paymentId: string; amountPaise: number; sourceRow: number };
-export type SettlementRow = { paymentId: string; purchaseRef: string; settlementId: string; utr: string; grossPaise: number; feePaise: number | null; taxPaise: number | null; refundPaise: number | null; netPaise: number; sourceRow: number };
-export type BankRow = { utr: string; description: string; amountPaise: number; sourceRow: number };
-export type Finding = { id: string; category: "missing_payment" | "unmapped_gateway_payment" | "amount_variance" | "settlement_math" | "missing_bank_credit" | "bank_unmatched"; severity: "high" | "medium" | "low"; reference: string; explanation: string; evidence: string[]; suggestedAction: string; amountPaise: number };
+export type SettlementRow = { paymentId: string; purchaseRef: string; settlementId: string; utr: string; grossPaise: number; feePaise: number | null; taxPaise: number | null; refundPaise: number | null; netPaise: number; settledAt: string; sourceRow: number };
+export type BankRow = { utr: string; description: string; amountPaise: number; transactionDate: string; sourceRow: number };
+export type Finding = { id: string; category: "missing_payment" | "unmapped_gateway_payment" | "amount_variance" | "settlement_math" | "missing_bank_credit" | "bank_unmatched"; severity: "high" | "medium" | "low"; reference: string; explanation: string; evidence: string[]; suggestedAction: string; amountPaise: number; paymentId?: string; purchaseRef?: string; settlementId?: string; utr?: string; settlementDate?: string; bankCreditDate?: string };
 export type ReconciliationReport = {
   generatedAt: string;
   mode: "sample" | "uploaded";
@@ -11,15 +11,16 @@ export type ReconciliationReport = {
   summary: { orderCount: number; gatewayPaymentCount: number; bankCreditCount: number; matchedOrderCount: number; reconciledSettlementCount: number; settlementCount: number; exceptionCount: number; exceptionAmountPaise: number };
   steps: AgentStep[];
   findings: Finding[];
-  matched: Array<{ purchaseRef: string; paymentId: string; settlementId: string; amountPaise: number; netPaise: number; utr: string }>;
+  matched: Array<{ purchaseRef: string; paymentId: string; settlementId: string; amountPaise: number; netPaise: number; feePaise: number | null; utr: string; settlementDate: string; bankCreditDate: string }>;
   benchmark?: { label: string; sourceRecordCount: number; orderRecordCount: number; expectedCleanMatchCount: number; actualCleanMatchCount: number; falseMatchCount: number; expectedExceptionCount: number; actualExceptionCount: number; correctExceptionCount: number; falseExceptionCount: number; precisionPercent: number; recallPercent: number; exceptionPrecisionPercent: number; exceptionRecallPercent: number };
 };
 
 function asRupees(paise: number) { return (paise / 100).toFixed(2); }
 export function demoInput() {
   const orderLines = ["purchase_ref,payment_id,amount_rupees,created_at"];
-  const settlementLines = ["payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,fee_rupees,tax_rupees,refund_rupees,net_amount_rupees"];
+  const settlementLines = ["payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,fee_rupees,tax_rupees,refund_rupees,net_amount_rupees,settled_at"];
   const bankGroups = new Map<number, number>();
+  const batchDay = (batch: number) => batch === 2 ? 11 : batch === 5 ? 25 : 1 + (batch - 1) * 2;
   for (let index = 0; index < 60; index++) {
     const orderNumber = index + 1;
     const batch = Math.floor(index / 5) + 1;
@@ -27,26 +28,34 @@ export function demoInput() {
     const paymentId = `pay_demo_${String(orderNumber).padStart(3, "0")}`;
     const orderGross = 100000 + (index * 13721 % 1900000);
     orderLines.push(`${orderRef},${paymentId},${asRupees(orderGross)},2026-09-${String(1 + index % 28).padStart(2, "0")}T10:00:00Z`);
-    if (index === 57) continue; // known missing payment row
+    if (index >= 55 && index <= 57) continue; // known checkout drop-offs with no gateway payment row
     const settlementGross = orderGross + (index === 12 ? 5000 : 0); // known gross conflict
     const fee = Math.round(settlementGross * 0.02);
     const tax = Math.round(fee * 0.18);
-    const net = settlementGross - fee - tax + (index === 23 ? 500 : 0); // known arithmetic exception
+    const net = settlementGross - fee - tax + (index === 23 ? 500 : 0) - (index === 30 ? 1 : 0); // arithmetic exception and accepted one-paisa rounding edge
     const settlementId = `setl_demo_${String(batch).padStart(2, "0")}`;
     const utr = `UTR-DEMO-${String(batch).padStart(3, "0")}`;
-    settlementLines.push(`${paymentId},${orderRef},${settlementId},${utr},${asRupees(settlementGross)},${asRupees(fee)},${asRupees(tax)},0.00,${asRupees(net)}`);
+    const settlementDate = new Date(Date.UTC(2026, 8, batchDay(batch), 20, 0));
+    const settledAt = settlementDate.toISOString();
+    settlementLines.push(`${paymentId},${orderRef},${settlementId},${utr},${asRupees(settlementGross)},${asRupees(fee)},${asRupees(tax)},0.00,${asRupees(net)},${settledAt}`);
     bankGroups.set(batch, (bankGroups.get(batch) || 0) + net);
   }
-  // Known orphan settlement. It shares a payout with valid payments so group arithmetic stays realistic.
-  const orphanGross = 735000, orphanFee = Math.round(orphanGross * 0.02), orphanTax = Math.round(orphanFee * 0.18), orphanNet = orphanGross - orphanFee - orphanTax;
-  settlementLines.push(`pay_demo_orphan,ORD-LEGACY-77,setl_demo_12,UTR-DEMO-012,${asRupees(orphanGross)},${asRupees(orphanFee)},${asRupees(orphanTax)},0.00,${asRupees(orphanNet)}`);
-  bankGroups.set(12, (bankGroups.get(12) || 0) + orphanNet);
+  // Three unmapped gateway rows share a valid payout; each must remain an explicit exception.
+  for (let index = 0; index < 3; index++) {
+    const orphanGross = 735000 + index * 50000, orphanFee = Math.round(orphanGross * 0.02), orphanTax = Math.round(orphanFee * 0.18), orphanNet = orphanGross - orphanFee - orphanTax;
+    const orphanDate = new Date(Date.UTC(2026, 8, batchDay(12), 20, 0)).toISOString();
+    settlementLines.push(`pay_demo_orphan_${index + 1},ORD-LEGACY-${77 + index},setl_demo_12,UTR-DEMO-012,${asRupees(orphanGross)},${asRupees(orphanFee)},${asRupees(orphanTax)},0.00,${asRupees(orphanNet)},${orphanDate}`);
+    bankGroups.set(12, (bankGroups.get(12) || 0) + orphanNet);
+  }
   const bankLines = ["utr,description,credit_rupees,transaction_date"];
   for (const [batch, amountPaise] of bankGroups) {
     if (batch === 9) continue; // known missing bank credit
-    bankLines.push(`UTR-DEMO-${String(batch).padStart(3, "0")},RAZORPAY SETTLEMENT setl_demo_${String(batch).padStart(2, "0")},${asRupees(amountPaise)},2026-10-01`);
+    const batchSettlement = new Date(Date.UTC(2026, 8, batchDay(batch), 20, 0));
+    const isWeekendTiming = batch === 2 || batch === 5;
+    const creditDate = new Date(batchSettlement.getTime() + (isWeekendTiming ? 60 : 24) * 60 * 60 * 1000);
+    bankLines.push(`UTR-DEMO-${String(batch).padStart(3, "0")},RAZORPAY SETTLEMENT setl_demo_${String(batch).padStart(2, "0")},${asRupees(amountPaise + (batch === 1 ? 500 : 0))},${creditDate.toISOString()}`);
   }
-  bankLines.push("BANK-OTHER-22,NEFT CUSTOMER CREDIT,4200.00,2026-10-01"); // known unmatched credit
+  bankLines.push("BANK-OTHER-22,NEFT CUSTOMER CREDIT,4200.00,2026-10-01", "BANK-OTHER-23,IMPS CUSTOMER CREDIT,1800.00,2026-10-01", "BANK-OTHER-24,NEFT MARKETPLACE CREDIT,2800.00,2026-10-01"); // known unmatched credits
   return { ordersCsv: orderLines.join("\n"), settlementsCsv: settlementLines.join("\n"), bankCsv: bankLines.join("\n") };
 }
 
@@ -88,8 +97,8 @@ function amount(row: InputRow, names: string[], source: string, line: number, re
   return Math.round(numeric * 100);
 }
 function money(paise: number) { return `₹${(paise / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
-function finding(id: string, category: Finding["category"], severity: Finding["severity"], reference: string, explanation: string, evidence: string[], suggestedAction: string, amountPaise: number): Finding {
-  return { id, category, severity, reference, explanation, evidence, suggestedAction, amountPaise };
+function finding(id: string, category: Finding["category"], severity: Finding["severity"], reference: string, explanation: string, evidence: string[], suggestedAction: string, amountPaise: number, context: Pick<Finding, "paymentId" | "purchaseRef" | "settlementId" | "utr" | "settlementDate" | "bankCreditDate"> = {}): Finding {
+  return { id, category, severity, reference, explanation, evidence, suggestedAction, amountPaise, ...context };
 }
 
 function parseOrders(text: string): OrderRow[] {
@@ -110,7 +119,7 @@ function parseSettlements(text: string): SettlementRow[] {
       feePaise: value(row, "fee_rupees", "fees_rupees", "fee", "fees", "razorpay_fee") ? amount(row, ["fee_rupees", "fees_rupees", "fee", "fees", "razorpay_fee"], "Razorpay settlement export", index + 2) : null,
       taxPaise: value(row, "tax_rupees", "gst_rupees", "tax", "gst", "fee_tax") ? amount(row, ["tax_rupees", "gst_rupees", "tax", "gst", "fee_tax"], "Razorpay settlement export", index + 2) : null,
       refundPaise: value(row, "refund_rupees", "refund_amount_rupees", "refund", "refund_offset") ? amount(row, ["refund_rupees", "refund_amount_rupees", "refund", "refund_offset"], "Razorpay settlement export", index + 2) : null,
-      netPaise: amount(row, ["net_amount_rupees", "settled_amount_rupees", "net_amount", "settlement_amount", "settled_amount"], "Razorpay settlement export", index + 2), sourceRow: index + 2,
+      netPaise: amount(row, ["net_amount_rupees", "settled_amount_rupees", "net_amount", "settlement_amount", "settled_amount"], "Razorpay settlement export", index + 2), settledAt: value(row, "settled_at", "settlement_date", "settled_date", "processed_at", "created_at"), sourceRow: index + 2,
     };
   });
 }
@@ -123,6 +132,7 @@ function parseBank(text: string): BankRow[] {
   return rows.flatMap((row, index) => {
     const utr = value(row, "utr", "utr_number", "bank_reference", "reference", "transaction_reference");
     const description = value(row, "description", "narration", "particulars", "remarks");
+    const transactionDate = value(row, "transaction_date", "value_date", "posted_at", "date");
     const direction = value(row, "transaction_type", "type", "dr_cr", "cr_dr", "debit_credit").trim().toLowerCase();
     const creditText = value(row, ...creditHeaders);
     const debitText = value(row, ...debitHeaders);
@@ -137,7 +147,7 @@ function parseBank(text: string): BankRow[] {
     if (hasDebitColumn && debitText && Number(debitText.replace(/[₹,\s]/g, "")) > 0 && !creditText) return [];
     if (!utr && !description) throw new Error(`Bank statement row ${index + 2}: include a UTR/reference or narration.`);
     const amountHeaders = hasCreditColumn ? creditHeaders : ["amount_rupees", "amount", "transaction_amount_rupees", "transaction_amount"];
-    return [{ utr, description, amountPaise: amount(row, amountHeaders, "Bank statement", index + 2), sourceRow: index + 2 }];
+    return [{ utr, description, amountPaise: amount(row, amountHeaders, "Bank statement", index + 2), transactionDate, sourceRow: index + 2 }];
   });
 }
 
@@ -186,28 +196,28 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
     }
     const order = identityConflict ? undefined : paymentCandidate || referenceCandidate;
     if (!order && !identityConflict) {
-      findings.push(finding(`orphan-payment-${settlement.sourceRow}`, "unmapped_gateway_payment", "high", settlement.paymentId || settlement.purchaseRef, "A Razorpay settlement row did not match a merchant order by payment ID or purchase reference. Amount-only matching was not attempted.", [`Razorpay settlement row ${settlement.sourceRow}`, settlement.settlementId || "No settlement ID"], "Check the merchant reference mapping and settlement period; confirm the intended order before linking it.", settlement.grossPaise));
+        findings.push(finding(`orphan-payment-${settlement.sourceRow}`, "unmapped_gateway_payment", "high", settlement.paymentId || settlement.purchaseRef, "A Razorpay settlement row did not match a merchant order by payment ID or purchase reference. Amount-only matching was not attempted.", [`Razorpay settlement row ${settlement.sourceRow}`, settlement.settlementId || "No settlement ID", ...(settlement.settledAt ? [`Settlement date ${settlement.settledAt}`] : [])], "Check the merchant reference mapping and settlement period; confirm the intended order before linking it.", settlement.grossPaise, { paymentId: settlement.paymentId, purchaseRef: settlement.purchaseRef, settlementId: settlement.settlementId, utr: settlement.utr, settlementDate: settlement.settledAt }));
     } else if (order) {
       ordersWithPaymentRows.add(order);
       if (order.paymentId && settlement.paymentId && order.paymentId !== settlement.paymentId) {
         findings.push(finding(`payment-id-variance-${settlement.sourceRow}`, "amount_variance", "high", order.purchaseRef, "The purchase reference matched but the payment IDs conflict.", [`Merchant payment ${order.paymentId}`, `Gateway payment ${settlement.paymentId}`, `Merchant row ${order.sourceRow}`, `Settlement row ${settlement.sourceRow}`], "Verify the payment-to-order mapping; do not auto-correct conflicting IDs.", settlement.grossPaise));
       }
       if (order.amountPaise !== settlement.grossPaise) {
-        findings.push(finding(`gross-variance-${settlement.sourceRow}`, "amount_variance", "high", order.purchaseRef, `Merchant gross ${money(order.amountPaise)} differs from gateway gross ${money(settlement.grossPaise)}.`, [`Merchant order row ${order.sourceRow}`, `Settlement row ${settlement.sourceRow}`, `Difference ${money(Math.abs(order.amountPaise - settlement.grossPaise))}`], "Review partial capture, adjustment, or mapping before accepting the match.", Math.abs(order.amountPaise - settlement.grossPaise)));
+        findings.push(finding(`gross-variance-${settlement.sourceRow}`, "amount_variance", "high", order.purchaseRef, `Merchant gross ${money(order.amountPaise)} differs from gateway gross ${money(settlement.grossPaise)}.`, [`Merchant order row ${order.sourceRow}`, `Settlement row ${settlement.sourceRow}`, `Difference ${money(Math.abs(order.amountPaise - settlement.grossPaise))}`, ...(settlement.settledAt ? [`Settlement date ${settlement.settledAt}`] : [])], "Review partial capture, adjustment, or mapping before accepting the match.", Math.abs(order.amountPaise - settlement.grossPaise), { paymentId: settlement.paymentId || order.paymentId, purchaseRef: order.purchaseRef, settlementId: settlement.settlementId, utr: settlement.utr, settlementDate: settlement.settledAt }));
       }
       if (order.amountPaise === settlement.grossPaise && (!order.paymentId || !settlement.paymentId || order.paymentId === settlement.paymentId)) {
-        matched.push({ purchaseRef: order.purchaseRef, paymentId: settlement.paymentId || order.paymentId, settlementId: settlement.settlementId, amountPaise: order.amountPaise, netPaise: settlement.netPaise, utr: settlement.utr });
+        matched.push({ purchaseRef: order.purchaseRef, paymentId: settlement.paymentId || order.paymentId, settlementId: settlement.settlementId, amountPaise: order.amountPaise, netPaise: settlement.netPaise, feePaise: settlement.feePaise, utr: settlement.utr, settlementDate: settlement.settledAt, bankCreditDate: "" });
       }
     }
     const computedNet = settlement.feePaise !== null && settlement.taxPaise !== null && settlement.refundPaise !== null ? settlement.grossPaise - settlement.feePaise - settlement.taxPaise - settlement.refundPaise : null;
     if (computedNet !== null && Math.abs(computedNet - settlement.netPaise) > 1) {
-      findings.push(finding(`settlement-math-${settlement.sourceRow}`, "settlement_math", "medium", settlement.settlementId || settlement.paymentId, `Gross less fee, tax, and refund is ${money(computedNet)}, while the export reports ${money(settlement.netPaise)} net.`, [`Gross ${money(settlement.grossPaise)}`, `Fee ${money(settlement.feePaise!)}`, `Tax ${money(settlement.taxPaise!)}`, `Refund/offset ${money(settlement.refundPaise!)}`, `Reported net ${money(settlement.netPaise)}`, `Settlement row ${settlement.sourceRow}`], "Inspect the settlement line and any separate adjustment before accounting sign-off.", Math.abs(computedNet - settlement.netPaise)));
+      findings.push(finding(`settlement-math-${settlement.sourceRow}`, "settlement_math", "medium", settlement.settlementId || settlement.paymentId, `Gross less fee, tax, and refund is ${money(computedNet)}, while the export reports ${money(settlement.netPaise)} net.`, [`Gross ${money(settlement.grossPaise)}`, `Fee ${money(settlement.feePaise!)}`, `Tax ${money(settlement.taxPaise!)}`, `Refund/offset ${money(settlement.refundPaise!)}`, `Reported net ${money(settlement.netPaise)}`, `Settlement row ${settlement.sourceRow}`, ...(settlement.settledAt ? [`Settlement date ${settlement.settledAt}`] : [])], "Inspect the settlement line and any separate adjustment before accounting sign-off.", Math.abs(computedNet - settlement.netPaise), { paymentId: settlement.paymentId, purchaseRef: settlement.purchaseRef, settlementId: settlement.settlementId, utr: settlement.utr, settlementDate: settlement.settledAt }));
     }
   }
 
   for (const order of orders) {
     const matchedOrder = ordersWithPaymentRows.has(order);
-    if (!matchedOrder) findings.push(finding(`missing-payment-${order.sourceRow}`, "missing_payment", "medium", order.purchaseRef, "No Razorpay settlement row matched this merchant order by payment ID or purchase reference.", [`Merchant order row ${order.sourceRow}`, `Expected gross ${money(order.amountPaise)}`, order.paymentId ? `Expected payment ${order.paymentId}` : "Merchant payment ID not supplied"], "Check whether payment is still pending, outside the export date range, or absent; confirm in the provider dashboard.", order.amountPaise));
+    if (!matchedOrder) findings.push(finding(`missing-payment-${order.sourceRow}`, "missing_payment", "medium", order.purchaseRef, "No Razorpay settlement row matched this merchant order by payment ID or purchase reference.", [`Merchant order row ${order.sourceRow}`, `Expected gross ${money(order.amountPaise)}`, order.paymentId ? `Expected payment ${order.paymentId}` : "Merchant payment ID not supplied"], "Check whether payment is still pending, outside the export date range, or absent; confirm in the provider dashboard.", order.amountPaise, { paymentId: order.paymentId, purchaseRef: order.purchaseRef }));
   }
 
   const settlementsByKey = new Map<string, SettlementRow[]>();
@@ -236,19 +246,21 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
     }
     if (candidates.length > 1) {
       candidates.forEach(row => usedBankRows.add(row.sourceRow));
-      findings.push(finding(`bank-ambiguous-${settlementId}`, "amount_variance", "high", settlementId, `Multiple bank rows use UTR ${utr}; the settlement cannot be safely reconciled automatically.`, [`Settlement rows ${rows.map(row => row.sourceRow).join(", ")}`, ...candidates.map(row => `Bank row ${row.sourceRow}: ${money(row.amountPaise)}`)], "Review duplicate UTR entries and confirm which bank credit, if any, corresponds to this settlement.", expectedNet));
+      findings.push(finding(`bank-ambiguous-${settlementId}`, "amount_variance", "high", settlementId, `Multiple bank rows use UTR ${utr}; the settlement cannot be safely reconciled automatically.`, [`Settlement rows ${rows.map(row => row.sourceRow).join(", ")}`, ...candidates.map(row => `Bank row ${row.sourceRow}: ${money(row.amountPaise)}`)], "Review duplicate UTR entries and confirm which bank credit, if any, corresponds to this settlement.", expectedNet, { paymentId: rows[0]?.paymentId || "", settlementId, utr, settlementDate: rows.find(row => row.settledAt)?.settledAt || "", bankCreditDate: candidates.length === 1 ? candidates[0].transactionDate : "" }));
       continue;
     }
     const bankMatch = candidates[0];
     if (!bankMatch) {
-      findings.push(finding(`bank-missing-${settlementId}`, "missing_bank_credit", "medium", settlementId, `Settlement net of ${money(expectedNet)} has no exact UTR match in the uploaded bank statement.`, [`Settlement ${settlementId}`, utr ? `Expected UTR ${utr}` : "Settlement export has no UTR", `Expected credit ${money(expectedNet)}`], "Check the bank statement date range and settlement timing. Escalate only if the credit is overdue.", expectedNet));
+      const settlementDate = rows.find(row => row.settledAt)?.settledAt || "";
+      findings.push(finding(`bank-missing-${settlementId}`, "missing_bank_credit", "medium", settlementId, `Settlement net of ${money(expectedNet)} has no exact UTR match in the uploaded bank statement.`, [`Settlement ${settlementId}`, utr ? `Expected UTR ${utr}` : "Settlement export has no UTR", `Expected credit ${money(expectedNet)}`, ...(settlementDate ? [`Settlement date ${settlementDate}`] : [])], "Check the bank statement date range and settlement timing. Escalate only if the credit is overdue.", expectedNet, { paymentId: rows[0]?.paymentId || "", purchaseRef: rows[0]?.purchaseRef || "", settlementId, utr, settlementDate }));
       continue;
     }
     usedBankRows.add(bankMatch.sourceRow);
+    for (const match of matched) if (match.utr && match.utr === utr) match.bankCreditDate = bankMatch.transactionDate;
     if (bankMatch.amountPaise === expectedNet) reconciledSettlementCount++;
-    else findings.push(finding(`bank-variance-${settlementId}`, "amount_variance", "high", settlementId, `Bank credit ${money(bankMatch.amountPaise)} differs from settlement net ${money(expectedNet)}.`, [`Settlement ${settlementId}`, `UTR ${utr}`, `Settlement export rows ${rows.map(row => row.sourceRow).join(", ")}`, `Bank statement row ${bankMatch.sourceRow}`], "Review the difference and any separate bank charge/adjustment; do not auto-post the variance.", Math.abs(bankMatch.amountPaise - expectedNet)));
+    else findings.push(finding(`bank-variance-${settlementId}`, "amount_variance", "high", settlementId, `Bank credit ${money(bankMatch.amountPaise)} differs from settlement net ${money(expectedNet)}.`, [`Settlement ${settlementId}`, `UTR ${utr}`, `Settlement export rows ${rows.map(row => row.sourceRow).join(", ")}`, `Bank statement row ${bankMatch.sourceRow}`, ...(rows.find(row => row.settledAt)?.settledAt ? [`Settlement date ${rows.find(row => row.settledAt)!.settledAt}`] : []), ...(bankMatch.transactionDate ? [`Bank transaction date ${bankMatch.transactionDate}`] : [])], "Review the difference and any separate bank charge/adjustment; do not auto-post the variance.", Math.abs(bankMatch.amountPaise - expectedNet), { paymentId: rows[0]?.paymentId || "", settlementId, utr, settlementDate: rows.find(row => row.settledAt)?.settledAt || "", bankCreditDate: bankMatch.transactionDate }));
   }
-  for (const row of bank) if (!usedBankRows.has(row.sourceRow)) findings.push(finding(`bank-unmatched-${row.sourceRow}`, "bank_unmatched", "low", row.utr || row.description, "This bank credit did not match any settlement UTR in the uploaded export.", [`Bank statement row ${row.sourceRow}`, row.utr ? `UTR ${row.utr}` : "No UTR", `Credit ${money(row.amountPaise)}`, row.description || "No narration"], "Check for a settlement outside this export period or a non-Razorpay credit; confirm before assigning it.", row.amountPaise));
+  for (const row of bank) if (!usedBankRows.has(row.sourceRow)) findings.push(finding(`bank-unmatched-${row.sourceRow}`, "bank_unmatched", "low", row.utr || row.description, "This bank credit did not match any settlement UTR in the uploaded export.", [`Bank statement row ${row.sourceRow}`, row.utr ? `UTR ${row.utr}` : "No UTR", `Credit ${money(row.amountPaise)}`, row.description || "No narration", ...(row.transactionDate ? [`Bank transaction date ${row.transactionDate}`] : [])], "Check for a settlement outside this export period or a non-Razorpay credit; confirm before assigning it.", row.amountPaise, { utr: row.utr, bankCreditDate: row.transactionDate }));
 
   const steps: AgentStep[] = [
     { id: "ingest", title: "Ingest three source ledgers", tool: "load_source_files", detail: `Read ${orders.length} merchant orders, ${settlements.length} Razorpay settlement lines, and ${bank.length} bank credits.`, count: orders.length + settlements.length + bank.length, status: "complete" },
@@ -266,12 +278,12 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
   };
   if (input.mode === "sample") {
     const expectedCleanPairs = new Set(Array.from({ length: 60 }, (_, index) => index)
-      .filter(index => index !== 12 && index !== 57)
+      .filter(index => index !== 12 && !(index >= 55 && index <= 57))
       .map(index => `pay_demo_${String(index + 1).padStart(3, "0")}|ORD-${9001 + index}`));
     const actualKeys = matched.map(row => `${row.paymentId}|${row.purchaseRef}`);
     const truePositives = actualKeys.filter(key => expectedCleanPairs.has(key)).length;
     const falseMatches = actualKeys.length - truePositives;
-    const expectedExceptionCounts = new Map<string, number>([["amount_variance", 1], ["settlement_math", 1], ["unmapped_gateway_payment", 1], ["missing_payment", 1], ["missing_bank_credit", 1], ["bank_unmatched", 1]]);
+    const expectedExceptionCounts = new Map<string, number>([["amount_variance", 2], ["settlement_math", 1], ["unmapped_gateway_payment", 3], ["missing_payment", 3], ["missing_bank_credit", 1], ["bank_unmatched", 3]]);
     const actualExceptionCounts = new Map<string, number>();
     for (const item of findings) actualExceptionCounts.set(item.category, (actualExceptionCounts.get(item.category) || 0) + 1);
     const correctExceptions = [...expectedExceptionCounts].reduce((sum, [category, expected]) => sum + Math.min(expected, actualExceptionCounts.get(category) || 0), 0);
@@ -283,14 +295,14 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
       expectedCleanMatchCount: expectedCleanPairs.size,
       actualCleanMatchCount: truePositives,
       falseMatchCount: falseMatches,
-      expectedExceptionCount: 6,
+      expectedExceptionCount: 13,
       actualExceptionCount: findings.length,
       correctExceptionCount: correctExceptions,
       falseExceptionCount: falseExceptions,
       precisionPercent: actualKeys.length ? Math.round(truePositives / actualKeys.length * 1000) / 10 : 0,
       recallPercent: expectedCleanPairs.size ? Math.round(truePositives / expectedCleanPairs.size * 1000) / 10 : 0,
       exceptionPrecisionPercent: findings.length ? Math.round(correctExceptions / findings.length * 1000) / 10 : 0,
-      exceptionRecallPercent: 100 * correctExceptions / 6,
+      exceptionRecallPercent: 100 * correctExceptions / 13,
     };
   }
   return report;

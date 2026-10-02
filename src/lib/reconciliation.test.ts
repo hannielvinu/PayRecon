@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { demoInput, runReconciliation } from "./reconciliation";
 import { makeTriageCases, triagePrompt, validateTriageResult } from "./ai-triage";
+import { investigatorPrompt, makeInvestigatorCases, validateInvestigatorResult } from "./ai-investigator";
+import { localFinanceCommand, validateFinanceFilters } from "./ai-command";
 
 const orders = "purchase_ref,payment_id,amount_rupees\nORD-1,pay-1,100.00\nORD-2,pay-2,100.00";
 const settlements = "payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,fee_rupees,tax_rupees,refund_rupees,net_amount_rupees\npay-1,ORD-1,setl-1,UTR-1,100.00,2.00,0.36,0,97.64\npay-2,ORD-2,setl-1,UTR-1,100.00,2.00,0.36,0,97.64";
@@ -11,10 +13,11 @@ const run = (bankCsv = matchingBank, settlementCsv = settlements, orderCsv = ord
 
 test("known-answer sample surfaces its six seeded categories without false matches", () => {
   const report = runReconciliation({ ...demoInput(), mode: "sample" });
-  assert.equal(report.benchmark?.sourceRecordCount, 132);
-  assert.equal(report.benchmark?.actualCleanMatchCount, 58);
+  assert.equal(report.benchmark?.sourceRecordCount, 134);
+  assert.equal(report.benchmark?.actualCleanMatchCount, 56);
   assert.equal(report.benchmark?.falseMatchCount, 0);
-  assert.equal(report.benchmark?.actualExceptionCount, 6);
+  assert.equal(report.benchmark?.actualExceptionCount, 13);
+  assert.equal(report.benchmark?.falseExceptionCount, 0);
   assert.equal(report.benchmark?.falseExceptionCount, 0);
 });
 
@@ -132,4 +135,39 @@ test("attaches source-row evidence to financial exceptions", () => {
   assert.ok(mathError.evidence.includes("Settlement row 2"));
   assert.ok(missingOrder);
   assert.ok(missingOrder.evidence.includes("Merchant order row 3"));
+});
+
+test("sample run includes settlement and bank dates for delay investigation and fee summaries", () => {
+  const report = runReconciliation({ ...demoInput(), mode: "sample" });
+  const delayed = report.matched.filter(row => row.settlementDate && row.bankCreditDate && Date.parse(row.bankCreditDate) - Date.parse(row.settlementDate) > 48 * 60 * 60 * 1000);
+  assert.ok(delayed.length >= 10, "two synthetic Friday payout groups should credit after the 48-hour window");
+  assert.ok(report.matched.every(row => row.feePaise !== null));
+  assert.ok(report.matched.reduce((sum, row) => sum + (row.feePaise || 0), 0) > 0);
+  assert.equal(report.findings.some(item => item.category === "settlement_math" && item.evidence.includes("Settlement row 32")), false, "a one-paisa edge case remains within the deterministic tolerance");
+});
+
+test("AI investigator requires exact source identifiers and balanced, evidence-sized draft journals", () => {
+  const cases = makeInvestigatorCases([{ category: "settlement_math", severity: "medium", reference: "setl-1", explanation: "Settlement arithmetic differs.", evidence: ["Gross 100.00", "Fee 2.00", "Tax 0.36", "Reported net 90.00"], amountPaise: 836, paymentId: "pay-1", settlementId: "setl-1", purchaseRef: "ORD-1", utr: "UTR-1" }]);
+  const prompt = investigatorPrompt(cases);
+  assert.ok(prompt.includes("do not invent IDs"));
+  const good = { cases: [{ caseKey: "F01", causeType: "unexplained_variance", causeHypothesis: "The export may reflect a separate adjustment; verify its supporting line before accounting.", supportTicket: { subject: "Please review payment pay-1 settlement setl-1", body: "Please investigate payment pay-1, settlement setl-1, order ORD-1, UTR-1. The deterministic finding amount is 836 paise; please confirm the source calculation." }, journalEntry: { status: "not_recommended", debitAccount: "", creditAccount: "", amountPaise: 0, memo: "Do not journal until the variance source and accounting policy are confirmed." } }] };
+  assert.equal(validateInvestigatorResult(JSON.stringify(good), cases).cases.length, 1);
+  const invented = structuredClone(good);
+  invented.cases[0].supportTicket.body = "Please review it. No identifiers or source detail are available in the draft request.";
+  assert.throws(() => validateInvestigatorResult(JSON.stringify(invented), cases), /omitted a source identifier/);
+  const unbalanced = structuredClone(good);
+  unbalanced.cases[0].journalEntry = { status: "draft", debitAccount: "Gateway Fee Expense", creditAccount: "Razorpay Clearing", amountPaise: 900, memo: "Proposed review." };
+  assert.throws(() => validateInvestigatorResult(JSON.stringify(unbalanced), cases), /exactly the finding amount/);
+});
+
+test("finance command maps only supported query filters and rejects unsafe model output", () => {
+  const mapped = localFinanceCommand("Filter unmapped gateway payments above ₹2,000");
+  assert.equal(mapped.filters.target, "exceptions");
+  assert.equal(mapped.filters.category, "unmapped_gateway_payment");
+  assert.equal(mapped.filters.minAmountPaise, 200000);
+  const delayed = localFinanceCommand("Which bank settlements were delayed by more than 48 hours?");
+  assert.equal(delayed.filters.target, "matched");
+  assert.equal(delayed.filters.minDelayHours, 48);
+  assert.equal(validateFinanceFilters(mapped.filters).minAmountPaise, 200000);
+  assert.throws(() => validateFinanceFilters({ ...mapped.filters, target: "run_sql" }), /unsupported result target/);
 });

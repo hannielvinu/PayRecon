@@ -80,6 +80,26 @@ body { font-size: 15px; }
 .priorityTag { padding: 3px 6px; border-radius: 4px; background: #f1f4f7; color: #617083; font-size: 9px; text-transform: uppercase; }
 .priorityTag.urgent { background: #fff0eb; color: #bf5232; }.priorityTag.high { background: #fff6df; color: #9c7115; }
 .aiTriageError { margin-top: 12px; padding: 10px 12px; border-radius: 6px; background: #fff6eb; color: #8e5817; font-size: 12px; }
+.investigatorCases { display: grid; gap: 10px; margin-top: 15px; }
+.investigatorCase { padding: 13px; border: 1px solid #e5ebf2; border-radius: 8px; background: #fbfcfe; }
+.investigatorCaseHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: #344255; font-size: 12px; }
+.investigatorCaseHead span { color: #8a641d; font-size: 9px; font-weight: 700; letter-spacing: .07em; }
+.investigatorCase>p { margin: 9px 0; color: #56677a; font-size: 12px; line-height: 1.55; }
+.investigatorCase details { margin-top: 8px; padding: 9px 11px; border: 1px solid #e9eef4; border-radius: 6px; background: #fff; color: #45566a; font-size: 11px; }
+.investigatorCase summary { cursor: pointer; color: #33445a; font-weight: 650; }
+.investigatorCase pre { overflow-wrap: anywhere; white-space: pre-wrap; color: #56677a; font: inherit; line-height: 1.5; }
+.investigatorCase details>small { display: block; margin: 8px 0; color: #8b641b; }
+.financeCommand { margin: 14px 0 18px; padding: 13px 15px; border: 1px solid #dce7f2; border-radius: 8px; background: #fff; }
+.financeCommand form { display: flex; align-items: center; gap: 10px; }
+.financeCommand form>span { color: #78899c; font-size: 22px; }
+.financeCommand input { min-width: 0; flex: 1; height: 40px; border: 0; outline: none; color: #344255; font: inherit; }
+.commandExamples { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 9px; color: #8290a0; font-size: 10px; }
+.commandExamples button,.commandResult button { padding: 5px 8px; border: 1px solid #e2e9f1; border-radius: 20px; background: #f8fafc; color: #53667c; cursor: pointer; font: inherit; }
+.commandExamples small { flex-basis: 100%; line-height: 1.5; }
+.commandResult { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; padding: 9px 11px; border-radius: 6px; background: #f1f7ff; color: #3f5d7e; font-size: 11px; }
+@media (max-width: 1180px) { .metricsStrip { grid-template-columns: repeat(3,minmax(0,1fr)); } }
+@media (max-width: 850px) { .metricsStrip { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 720px) { .financeCommand form { align-items: stretch; flex-wrap: wrap; }.financeCommand input { flex-basis: calc(100% - 40px); }.financeCommand form .primaryAction { width: 100%; }.metricsStrip { grid-template-columns: 1fr; }.investigatorCaseHead { align-items: flex-start; flex-direction: column; } }
 .aiConsentDialog { width: min(540px,100%); }
 .aiConsentList { display: grid; gap: 8px; margin: 18px 0; padding: 13px; border: 1px solid #e6edf4; border-radius: 7px; background: #f8fafc; }
 .aiConsentList p { margin: 0; color: #5f6d7f; font-size: 12px; line-height: 1.5; }
