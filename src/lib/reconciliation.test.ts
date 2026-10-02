@@ -46,3 +46,35 @@ test("rejects generic amount-only bank statements without transaction direction"
   const ambiguousBank = "reference,amount_rupees\nUTR-1,195.28";
   assert.throws(() => run(ambiguousBank), /Generic amount columns are ambiguous/);
 });
+
+test("treats payment ID and purchase reference pointing to different orders as ambiguous", () => {
+  const conflicting = "payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,net_amount_rupees\npay-1,ORD-2,setl-1,UTR-1,100.00,97.64";
+  const report = run(matchingBank, conflicting);
+  assert.equal(report.summary.matchedOrderCount, 0);
+  assert.ok(report.findings.some(item => item.explanation.includes("point to different merchant orders")));
+});
+
+test("does not reconcile a payout containing duplicate payment IDs even if the bank total matches the double-counted lines", () => {
+  const duplicateSettlement = `${settlements}\npay-1,ORD-1,setl-1,UTR-1,100.00,2.00,0.36,0,97.64`;
+  const doubleCountedBank = "utr,description,credit_rupees\nUTR-1,RAZORPAY,292.92";
+  const report = run(doubleCountedBank, duplicateSettlement);
+  assert.equal(report.summary.reconciledSettlementCount, 0);
+  assert.ok(report.findings.some(item => item.explanation.includes("repeats a payment ID")));
+});
+
+test("accepts a one-paise settlement arithmetic rounding difference", () => {
+  const onePaisa = "payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,fee_rupees,tax_rupees,refund_rupees,net_amount_rupees\npay-1,ORD-1,setl-1,UTR-1,100.00,2.00,0.36,0,97.63";
+  const onePaisaBank = "utr,description,credit_rupees\nUTR-1,RAZORPAY,97.63";
+  const report = run(onePaisaBank, onePaisa, "purchase_ref,payment_id,amount_rupees\nORD-1,pay-1,100.00");
+  assert.equal(report.findings.some(item => item.category === "settlement_math"), false);
+  assert.equal(report.summary.reconciledSettlementCount, 1);
+});
+
+test("parses UTF-8 BOM, quoted commas, and multiline CSV fields", () => {
+  const quotedOrders = "\uFEFFpurchase_ref,payment_id,amount_rupees\n\"ORD, 1\",pay-1,100.00";
+  const quotedSettlement = "payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,net_amount_rupees\npay-1,\"ORD, 1\",setl-1,UTR-1,100.00,97.64";
+  const quotedBank = "utr,description,credit_rupees\nUTR-1,\"Razorpay payout\ncredit\",97.64";
+  const report = run(quotedBank, quotedSettlement, quotedOrders);
+  assert.equal(report.summary.matchedOrderCount, 1);
+  assert.equal(report.summary.reconciledSettlementCount, 1);
+});

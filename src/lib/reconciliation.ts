@@ -168,19 +168,27 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
 
   const paymentMatches = new Map<SettlementRow, OrderRow>();
   const ordersWithPaymentRows = new Set<OrderRow>();
-  const seenPaymentIds = new Set<string>();
+  const seenPaymentIds = new Map<string, SettlementRow>();
+  const unsafeSettlementRows = new Set<number>();
   for (const settlement of settlements) {
     if (settlement.paymentId && seenPaymentIds.has(settlement.paymentId)) {
+      const original = seenPaymentIds.get(settlement.paymentId)!;
+      unsafeSettlementRows.add(original.sourceRow);
+      unsafeSettlementRows.add(settlement.sourceRow);
       findings.push(finding(`duplicate-payment-${settlement.sourceRow}`, "amount_variance", "high", settlement.paymentId, "The settlement export repeats a payment ID; totals could be double-counted.", [`Settlement export row ${settlement.sourceRow}`], "Inspect both rows and confirm whether this is a duplicate export line or a distinct adjustment.", settlement.grossPaise));
       continue;
     }
-    if (settlement.paymentId) seenPaymentIds.add(settlement.paymentId);
+    if (settlement.paymentId) seenPaymentIds.set(settlement.paymentId, settlement);
     const paymentCandidate = settlement.paymentId && !duplicateOrderPayments.has(settlement.paymentId) ? orderByPayment.get(settlement.paymentId) : undefined;
     const referenceCandidate = settlement.purchaseRef && !duplicateOrderRefs.has(settlement.purchaseRef) ? orderByRef.get(settlement.purchaseRef) : undefined;
-    const order = paymentCandidate || referenceCandidate;
-    if (!order) {
+    const identityConflict = Boolean(paymentCandidate && referenceCandidate && paymentCandidate !== referenceCandidate);
+    if (identityConflict) {
+      findings.push(finding(`identity-conflict-${settlement.sourceRow}`, "amount_variance", "high", settlement.paymentId || settlement.purchaseRef, "The payment ID and purchase reference point to different merchant orders; this row is ambiguous.", [`Payment ID ${settlement.paymentId} maps to merchant row ${paymentCandidate!.sourceRow}`, `Purchase reference ${settlement.purchaseRef} maps to merchant row ${referenceCandidate!.sourceRow}`, `Settlement row ${settlement.sourceRow}`], "Resolve the conflicting identifiers in the source ledgers before accepting this payment match.", settlement.grossPaise));
+    }
+    const order = identityConflict ? undefined : paymentCandidate || referenceCandidate;
+    if (!order && !identityConflict) {
       findings.push(finding(`orphan-payment-${settlement.sourceRow}`, "unmapped_gateway_payment", "high", settlement.paymentId || settlement.purchaseRef, "A Razorpay settlement row did not match a merchant order by payment ID or purchase reference. Amount-only matching was not attempted.", [`Razorpay settlement row ${settlement.sourceRow}`, settlement.settlementId || "No settlement ID"], "Check the merchant reference mapping and settlement period; confirm the intended order before linking it.", settlement.grossPaise));
-    } else {
+    } else if (order) {
       paymentMatches.set(settlement, order);
       ordersWithPaymentRows.add(order);
       if (order.paymentId && settlement.paymentId && order.paymentId !== settlement.paymentId) {
@@ -224,6 +232,10 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
     const settlementId = rows.find(row => row.settlementId)?.settlementId || key.replace(/^(utr:|setl:)/, "");
     const expectedNet = rows.reduce((sum, row) => sum + row.netPaise, 0);
     const candidates = utr ? bankRowsByUtr.get(utr) || [] : [];
+    if (rows.some(row => unsafeSettlementRows.has(row.sourceRow))) {
+      candidates.forEach(row => usedBankRows.add(row.sourceRow));
+      continue;
+    }
     if (candidates.length > 1) {
       candidates.forEach(row => usedBankRows.add(row.sourceRow));
       findings.push(finding(`bank-ambiguous-${settlementId}`, "amount_variance", "high", settlementId, `Multiple bank rows use UTR ${utr}; the settlement cannot be safely reconciled automatically.`, [`Settlement rows ${rows.map(row => row.sourceRow).join(", ")}`, ...candidates.map(row => `Bank row ${row.sourceRow}: ${money(row.amountPaise)}`)], "Review duplicate UTR entries and confirm which bank credit, if any, corresponds to this settlement.", expectedNet));
