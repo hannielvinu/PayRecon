@@ -166,7 +166,6 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
     }
   }
 
-  const paymentMatches = new Map<SettlementRow, OrderRow>();
   const ordersWithPaymentRows = new Set<OrderRow>();
   const seenPaymentIds = new Map<string, SettlementRow>();
   const unsafeSettlementRows = new Set<number>();
@@ -189,7 +188,6 @@ export function runReconciliation(input: { ordersCsv: string; settlementsCsv: st
     if (!order && !identityConflict) {
       findings.push(finding(`orphan-payment-${settlement.sourceRow}`, "unmapped_gateway_payment", "high", settlement.paymentId || settlement.purchaseRef, "A Razorpay settlement row did not match a merchant order by payment ID or purchase reference. Amount-only matching was not attempted.", [`Razorpay settlement row ${settlement.sourceRow}`, settlement.settlementId || "No settlement ID"], "Check the merchant reference mapping and settlement period; confirm the intended order before linking it.", settlement.grossPaise));
     } else if (order) {
-      paymentMatches.set(settlement, order);
       ordersWithPaymentRows.add(order);
       if (order.paymentId && settlement.paymentId && order.paymentId !== settlement.paymentId) {
         findings.push(finding(`payment-id-variance-${settlement.sourceRow}`, "amount_variance", "high", order.purchaseRef, "The purchase reference matched but the payment IDs conflict.", [`Merchant payment ${order.paymentId}`, `Gateway payment ${settlement.paymentId}`, `Merchant row ${order.sourceRow}`, `Settlement row ${settlement.sourceRow}`], "Verify the payment-to-order mapping; do not auto-correct conflicting IDs.", settlement.grossPaise));

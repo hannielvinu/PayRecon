@@ -60,6 +60,32 @@ body { font-size: 15px; }
 .reviewTextarea { resize: vertical; line-height: 1.5; }
 .reviewDialog .fieldLabel { margin-top: 17px; }
 .reviewDialogActions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 17px; }
+.aiTriagePanel { margin: 16px 0 20px; padding: 17px 19px; border: 1px solid #dbe6f1; border-radius: 9px; background: #fff; }
+.aiTriageHead { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.aiTriageHead h2 { margin: 8px 0 4px; color: #334154; font-size: 16px; }
+.aiTriageHead p { margin: 0; color: #748294; font-size: 12px; }
+.aiTriageHead .secondaryAction { flex: 0 0 auto; }
+.aiTriageDisclosure { margin-top: 14px; padding-top: 11px; border-top: 1px solid #edf1f5; color: #7b8795; font-size: 10px; line-height: 1.5; }
+.aiTriageResult { display: grid; grid-template-columns: minmax(220px,.7fr) minmax(0,1.3fr); gap: 14px; margin-top: 16px; }
+.aiSummary { padding: 13px; border-radius: 7px; background: #f3f8fd; }
+.aiSummary b { color: #344255; font-size: 12px; }
+.aiSummary p { margin: 8px 0; color: #536174; font-size: 12px; line-height: 1.55; }
+.aiSummary small { color: #77869a; font-size: 10px; }
+.aiCases { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.aiCase { padding: 11px 12px; border: 1px solid #e8edf2; border-radius: 7px; }
+.aiCase>div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.aiCase>div>span { color: #667386; font-size: 10px; text-transform: uppercase; }
+.aiCase p { margin: 8px 0; color: #536174; font-size: 11px; line-height: 1.45; }
+.aiCase small { color: #78879a; font-size: 10px; line-height: 1.4; }
+.priorityTag { padding: 3px 6px; border-radius: 4px; background: #f1f4f7; color: #617083; font-size: 9px; text-transform: uppercase; }
+.priorityTag.urgent { background: #fff0eb; color: #bf5232; }.priorityTag.high { background: #fff6df; color: #9c7115; }
+.aiTriageError { margin-top: 12px; padding: 10px 12px; border-radius: 6px; background: #fff6eb; color: #8e5817; font-size: 12px; }
+.aiConsentDialog { width: min(540px,100%); }
+.aiConsentList { display: grid; gap: 8px; margin: 18px 0; padding: 13px; border: 1px solid #e6edf4; border-radius: 7px; background: #f8fafc; }
+.aiConsentList p { margin: 0; color: #5f6d7f; font-size: 12px; line-height: 1.5; }
+.aiConsentList b { color: #344255; }
+.aiConsentActions { display: flex; justify-content: flex-end; gap: 9px; }
+@media (max-width: 720px) { .aiTriageHead { align-items: flex-start; flex-direction: column; }.aiTriageResult { grid-template-columns: 1fr; }.aiCases { grid-template-columns: 1fr; }.aiConsentActions { align-items: stretch; flex-direction: column-reverse; } }
 .reviewError { margin-top: 8px; color: #b33d45; font-size: 12px; }
 .decisionInline { display: grid; gap: 3px; margin-top: 5px; padding: 8px; border-left: 3px solid #64ad81; background: #f4faf6; }
 .decisionInline>b { color: #407454; font-size: 11px; }

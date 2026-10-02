@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Finding, ReconciliationReport } from "@/lib/reconciliation";
+import type { AiTriageResult, FindingCategory, FindingSeverity } from "@/lib/ai-triage";
 
 type SourceFiles = { orders: File | null; settlements: File | null; bank: File | null };
 type ReviewDecision = { outcome: string; note: string; reviewer: string; timestamp: string };
@@ -37,6 +38,11 @@ export default function Home() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showAiConsent, setShowAiConsent] = useState(false);
+  const [aiTriage, setAiTriage] = useState<AiTriageResult | null>(null);
+  const [aiModel, setAiModel] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -75,10 +81,26 @@ export default function Home() {
       sessionStorage.setItem("payrecon-review-decisions", "{}");
       sessionStorage.setItem("payrecon-review-history", "[]");
       setReviewDecisions({}); setReviewHistory([]);
+      setAiTriage(null); setAiModel(""); setAiError(""); setShowAiConsent(false);
       setReport(completed); setActiveTab("overview"); setNotice(`Agent run complete · ${completed.findings.length} review item${completed.findings.length === 1 ? "" : "s"} prepared.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not run reconciliation.");
     } finally { setRunning(false); setLoading(false); }
+  }
+
+  async function requestAiTriage() {
+    if (!report) return;
+    setAiLoading(true); setAiError("");
+    try {
+      const findings = report.findings.map(item => ({ category: item.category as FindingCategory, severity: item.severity as FindingSeverity }));
+      const response = await fetch("/api/ai/triage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ findings }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "AI triage could not run.");
+      setAiTriage(result.result as AiTriageResult); setAiModel(String(result.model || "Gemini")); setShowAiConsent(false);
+    } catch (cause) {
+      setAiError(cause instanceof Error ? cause.message : "AI triage could not run. Your deterministic report is unchanged.");
+      setShowAiConsent(false);
+    } finally { setAiLoading(false); }
   }
 
   const visibleFindings = useMemo(() => (report?.findings || []).filter(item =>
@@ -209,6 +231,7 @@ export default function Home() {
             <SummaryCard label="Needs attention" value={String(report.findings.length - reviewedCount)} sub={`${reviewedCount} decisions recorded`} tone="amber" icon="⚑" />
             <SummaryCard label="Value in exception rows" value={formatMoney(report.summary.exceptionAmountPaise)} sub="May overlap across related findings" tone="violet" icon="₹" />
           </div>
+          {report.findings.length > 0 && <section className="aiTriagePanel"><div className="aiTriageHead"><div><span className="miniTag">OPTIONAL AI ASSIST</span><h2>Exception triage</h2><p>Ask Gemini to prioritize the exception categories and suggest a safe verification queue.</p></div><button className="secondaryAction" onClick={() => { setAiError(""); setShowAiConsent(true); }} disabled={aiLoading || report.findings.length > 50} title={report.findings.length > 50 ? "AI triage supports up to 50 findings per run" : undefined}>{aiLoading ? "Gemini is reviewing…" : aiTriage ? "Run triage again" : "Prepare AI triage"}</button></div>{report.findings.length > 50 && <div className="aiTriageError">AI triage supports up to 50 findings per run. Narrow the reporting window and rerun reconciliation.</div>}{aiError && <div className="aiTriageError">{aiError}</div>}{aiTriage && <div className="aiTriageResult"><div className="aiSummary"><b>Batch readout · {aiModel}</b><p>{aiTriage.summary}</p><small>AI recommendation only · matching and amounts remain deterministic</small></div><div className="aiCases">{aiTriage.cases.map(item => { const finding = report.findings[Number(item.caseKey.slice(1)) - 1]; return <article className="aiCase" key={item.caseKey}><div><span>{item.caseKey}{finding ? ` · ${finding.category.replaceAll("_", " ")}` : ""}</span><b className={`priorityTag ${item.priority}`}>{item.priority}</b></div><p>{item.rationale}</p><small>Suggested check: {nextCheckLabel(item.nextCheck)}</small></article>; })}</div></div>}<div className="aiTriageDisclosure">Only opaque case labels, finding categories, and severity labels are sent to Google Gemini. Source rows, merchant/payment identifiers, amounts, and bank narration are excluded.</div></section>}
           {report.benchmark && <section className="benchmarkPanel"><div className="benchmarkHeading"><div><span className="miniTag">SYNTHETIC KNOWN-ANSWER BATCH</span><h2>Batch evaluation</h2><p>{report.benchmark.sourceRecordCount} source records · {report.benchmark.orderRecordCount} merchant orders · {report.benchmark.expectedExceptionCount} seeded exception cases</p></div><span className="benchmarkDisclosure">Generated test data · not merchant outcome evidence</span></div><div className="benchmarkMetrics"><div><small>Clean-match precision</small><b>{report.benchmark.precisionPercent}%</b><span>{report.benchmark.actualCleanMatchCount} correct · {report.benchmark.falseMatchCount} false matches</span></div><div><small>Clean-match recall</small><b>{report.benchmark.recallPercent}%</b><span>{report.benchmark.actualCleanMatchCount} / {report.benchmark.expectedCleanMatchCount} expected pairs</span></div><div><small>Known exceptions found</small><b>{report.benchmark.exceptionRecallPercent}%</b><span>{report.benchmark.correctExceptionCount} / {report.benchmark.expectedExceptionCount} seeded categories · {report.benchmark.falseExceptionCount} extra findings</span></div></div></section>}
 
           <div className="reconTabs"><button className={activeTab === "overview" ? "active" : ""} onClick={() => setActiveTab("overview")}>Overview</button><button className={activeTab === "exceptions" ? "active" : ""} onClick={() => setActiveTab("exceptions")}>Exception worklist <span>{report.findings.length - reviewedCount}</span></button><button className={activeTab === "activity" ? "active" : ""} onClick={() => setActiveTab("activity")}>Agent activity</button></div>
@@ -231,6 +254,7 @@ export default function Home() {
         <footer className="reconFooter"><span>PayRecon · Reconciliation workspace</span><span>Sample figures are synthetic · Uploaded files are processed locally</span></footer>
       </div>
     </section>
+    {showAiConsent && report && <div className="dialogBackdrop" onMouseDown={event => { if (event.target === event.currentTarget && !aiLoading) setShowAiConsent(false); }}><section className="helpDialog aiConsentDialog" role="dialog" aria-modal="true" aria-labelledby="ai-consent-title"><div className="dialogHeader"><div><span className="miniTag">EXTERNAL AI REQUEST</span><h2 id="ai-consent-title">Review what will be sent</h2><p>This optional request sends limited exception metadata to Google Gemini.</p></div><button className="dialogClose" aria-label="Close AI triage disclosure" onClick={() => setShowAiConsent(false)}>×</button></div><div className="aiConsentList"><p><b>Sent:</b> {report.findings.length} opaque case labels, finding categories, and severity levels.</p><p><b>Excluded:</b> uploaded files, row evidence, payment/order/UTR references, amounts, merchant names, and narration.</p><p><b>Used for:</b> a short queue summary, priority suggestions, and category-specific verification steps. Output is advisory and checked against this report.</p><p><b>Provider:</b> Google Gemini 3.8 Flash at low thinking level. The local server needs <code>GEMINI_API_KEY</code>.</p></div><div className="aiConsentActions"><button className="secondaryAction" onClick={() => setShowAiConsent(false)}>Cancel</button><button className="primaryAction" onClick={() => void requestAiTriage()} disabled={aiLoading}>{aiLoading ? "Sending labels…" : `Send ${report.findings.length} labels to Gemini`}</button></div></section></div>}
     {reviewFindingId && report && <div className="dialogBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) setReviewFindingId(null); }}><section className="helpDialog reviewDialog" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="dialogHeader"><div><span className="miniTag">FINANCE REVIEW</span><h2 id="review-title">Record a decision</h2><p>This decision is attached to the finding and included in the session export.</p></div><button className="dialogClose" aria-label="Close review dialog" onClick={() => setReviewFindingId(null)}>×</button></div>{(() => { const item = report.findings.find(finding => finding.id === reviewFindingId); return item ? <div className="reviewEvidence"><b>{item.reference} · {item.category.replaceAll("_", " ")}</b><p>{item.explanation}</p><small>{item.evidence.join(" · ")}</small></div> : null; })()}<label className="fieldLabel" htmlFor="review-outcome">DECISION</label><select id="review-outcome" className="reviewSelect" value={reviewOutcome} onChange={event => { setReviewOutcome(event.target.value); setReviewError(""); }}><option value="" disabled>Select the outcome you verified</option><option value="resolved">Resolved after source verification</option><option value="timing">Accepted as a timing difference</option><option value="escalated">Escalated for follow-up</option><option value="not_an_issue">Confirmed as not an issue</option></select><label className="fieldLabel" htmlFor="review-note">REVIEW NOTE</label><textarea id="review-note" className="reviewTextarea" value={reviewNote} onChange={event => { setReviewNote(event.target.value); setReviewError(""); }} placeholder="Record what you checked and why this decision is appropriate…" rows={3}/>{reviewError && <div className="reviewError">{reviewError}</div>}<div className="reviewDialogActions"><button className="secondaryAction" onClick={() => setReviewFindingId(null)}>Cancel</button><button className="primaryAction" onClick={saveReviewDecision}>Save review decision</button></div></section></div>}
     {showHelp && <div className="dialogBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowHelp(false); }}><section className="helpDialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><div className="dialogHeader"><div><h2 id="help-title">How reconciliation works</h2><p>PayRecon compares three files and prepares an evidence-backed finance review queue.</p></div><button className="dialogClose" aria-label="Close help" onClick={() => setShowHelp(false)}>×</button></div><ol className="helpList"><li><span>1</span><div><b>Upload the three ledgers</b>Merchant orders, Razorpay settlement lines, and bank credits for the same reporting window.</div></li><li><span>2</span><div><b>Run deterministic matching</b>Order/payment rows match by exact IDs; payout groups match to bank entries by UTR. Amount alone is never used as identity.</div></li><li><span>3</span><div><b>Review exceptions and export</b>Each finding includes source-row evidence. PayRecon does not alter books or move funds.</div></li></ol><button className="primaryAction" onClick={() => setShowHelp(false)}>Got it</button></section></div>}
   </main>;
@@ -246,4 +270,5 @@ function FindingRow({ item, decision, onReview, onReopen }: { item: Finding; dec
   return <tr><td><span className={`severityPill ${item.severity}`}>{severityLabel(item.severity)}</span></td><td><b>{item.reference || "Unreferenced"}</b><small className="categoryLabel">{item.category.replaceAll("_", " ")}</small></td><td><div className="findingText"><span>{item.explanation}</span><small>{item.evidence.join(" · ")}</small><em>Suggested: {item.suggestedAction}</em>{decision && <div className="decisionInline"><b>{outcomeLabel(decision.outcome)}</b><span>{decision.note}</span><small>{decision.reviewer} · {new Date(decision.timestamp).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></div>}</div></td><td>{formatMoney(item.amountPaise)}</td><td>{decision ? <button className="reviewButton isReviewed" onClick={onReopen}>Reopen</button> : <button className="reviewButton" onClick={onReview}>Review finding</button>}</td></tr>;
 }
 function outcomeLabel(outcome: string) { return ({ resolved: "Resolved after source verification", timing: "Accepted as a timing difference", escalated: "Escalated for follow-up", not_an_issue: "Confirmed as not an issue" } as Record<string, string>)[outcome] || outcome; }
+function nextCheckLabel(nextCheck: string) { return ({ review_payment_mapping: "Review payment/order reference mapping", inspect_settlement_math: "Inspect settlement fee, tax, and refund arithmetic", check_bank_window: "Check bank statement UTR and date window", verify_source_rows: "Verify the cited source rows", investigate_unmatched_record: "Investigate the unmatched bank or gateway record" } as Record<string, string>)[nextCheck] || "Verify source records"; }
 function EmptyTab({ title, message, action, onAction }: { title: string; message: string; action: string; onAction: () => void }) { return <section className="panel firstRun emptyStart"><span className="firstRunIcon">↔</span><b>{title}</b><p>{message}</p><button className="primaryAction" onClick={onAction}>{action} <span>→</span></button></section>; }

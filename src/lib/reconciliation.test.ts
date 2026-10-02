@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { demoInput, runReconciliation } from "./reconciliation";
+import { makeTriageCases, triagePrompt, validateTriageResult } from "./ai-triage";
 
 const orders = "purchase_ref,payment_id,amount_rupees\nORD-1,pay-1,100.00\nORD-2,pay-2,100.00";
 const settlements = "payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,fee_rupees,tax_rupees,refund_rupees,net_amount_rupees\npay-1,ORD-1,setl-1,UTR-1,100.00,2.00,0.36,0,97.64\npay-2,ORD-2,setl-1,UTR-1,100.00,2.00,0.36,0,97.64";
@@ -97,4 +98,38 @@ test("processes a 5,000-order synthetic batch with grouped payouts", () => {
   assert.equal(report.summary.settlementCount, 1000);
   assert.equal(report.summary.reconciledSettlementCount, 1000);
   assert.equal(report.summary.exceptionCount, 0);
+});
+
+test("builds a minimized AI payload without source identifiers or amounts", () => {
+  const cases = makeTriageCases([{ category: "amount_variance", severity: "high" }]);
+  const prompt = triagePrompt(cases);
+  assert.deepEqual(cases, [{ caseKey: "F01", category: "amount_variance", severity: "high" }]);
+  assert.equal(prompt.includes("ORD-9013"), false);
+  assert.equal(prompt.includes("₹"), false);
+  assert.throws(() => makeTriageCases(Array.from({ length: 51 }, () => ({ category: "missing_payment", severity: "medium" }))), /between 1 and 50/);
+});
+
+test("accepts only case-cited, category-compatible AI triage", () => {
+  const cases = makeTriageCases([{ category: "missing_bank_credit", severity: "medium" }]);
+  const valid = validateTriageResult(JSON.stringify({ summary: "Check the settlement window first.", cases: [{ caseKey: "F01", priority: "high", rationale: "A missing bank credit needs a timing check.", nextCheck: "check_bank_window" }] }), cases);
+  assert.equal(valid.cases[0].caseKey, "F01");
+  assert.throws(() => validateTriageResult(JSON.stringify({ summary: "Review this.", cases: [{ caseKey: "F99", priority: "urgent", rationale: "Check it.", nextCheck: "check_bank_window" }] }), cases), /missing or repeated case key/);
+  assert.throws(() => validateTriageResult(JSON.stringify({ summary: "Review this.", cases: [{ caseKey: "F01", priority: "urgent", rationale: "Check it.", nextCheck: "inspect_settlement_math" }] }), cases), /does not apply to the finding category/);
+});
+
+test("attaches source-row evidence to financial exceptions", () => {
+  const orderWithVariance = "purchase_ref,payment_id,amount_rupees\nORD-1,pay-1,120.00\nORD-2,pay-2,50.00";
+  const settlementWithMathError = "payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,fee_rupees,tax_rupees,refund_rupees,net_amount_rupees\npay-1,ORD-1,setl-1,UTR-1,100.00,2.00,0.36,0,90.00";
+  const report = run(matchingBank, settlementWithMathError, orderWithVariance);
+  const grossVariance = report.findings.find(item => item.explanation.includes("differs from gateway gross"));
+  const mathError = report.findings.find(item => item.category === "settlement_math");
+  const missingOrder = report.findings.find(item => item.category === "missing_payment");
+
+  assert.ok(grossVariance);
+  assert.ok(grossVariance.evidence.includes("Merchant order row 2"));
+  assert.ok(grossVariance.evidence.includes("Settlement row 2"));
+  assert.ok(mathError);
+  assert.ok(mathError.evidence.includes("Settlement row 2"));
+  assert.ok(missingOrder);
+  assert.ok(missingOrder.evidence.includes("Merchant order row 3"));
 });
