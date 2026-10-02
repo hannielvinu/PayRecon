@@ -8,6 +8,6 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
-# IntentLock Project Handoff
+# PayRecon Project Handoff
 
-Before modifying this repository, read [`skills.md`](./skills.md) and [`README.md`](./README.md). `skills.md` contains the product-specific continuation plan, safety invariants, current implementation status, verification workflow, and next recommended tasks. Preserve the Next.js-managed block above.
+Before modifying this repository, read [`skills.md`](./skills.md) and [`README.md`](./README.md). `skills.md` contains the PayRecon product context, safety invariants, current implementation status, verification workflow, and next recommended tasks. Preserve the Next.js-managed block above.

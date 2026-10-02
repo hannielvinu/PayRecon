@@ -1,115 +1,102 @@
-# IntentLock Coding-Agent Handoff
+# PayRecon Coding-Agent Handoff
 
-This file is the project-specific working guide for any AI coding agent continuing IntentLock. Read it together with `README.md` before making changes. Preserve the user’s goal: a polished, fully usable local product/simulator, not a throwaway demo. The user prefers fast progress and expects the agent to continue through phases without asking for a new prompt after every phase.
+This is the project-specific continuation guide for any coding agent working on this repository. Read this together with `README.md` before editing. The user has pivoted away from the former IntentLock retry-gating concept: **the product is now PayRecon**, an evidence-first payment settlement reconciliation agent. Do not revert to the old name or make recovery gating the main product.
+
+The user wants the assistant to complete the project phase by phase without needing a new prompt after every phase, prefers fast progress, and expects a polished working local application rather than an abstract pitch.
+
+## Immediate state
+
+- Product now has a public PayRecon landing page, local profile-selection sign-in, and a reconciliation workspace with three CSV uploads, one-click sample run, ledger summary, six-step agent trace, evidence-backed exception queue, reviewer decisions with notes, and downloadable exception CSV.
+- The interface now uses a Razorpay-inspired blue/white/neutral payments dashboard style with a custom PayRecon logo and SVG app icon. Landing, local profile-selection sign-in, role switching, sign-out, protected workspace entry, desktop layout, and 390px mobile layout were browser-verified. A review decision dialog requires an explicit outcome plus note; decisions and reopen events appear in activity history and current decisions are included in CSV export.
+- Latest reconciliation report and exception decisions survive same-tab reload using `sessionStorage`; decisions include reviewer, outcome, note, and timestamp and appear in the activity log/export. Raw CSV files are not persisted. Report state is removed when signing out or clearing the current run. This is not durable history or access control.
+- `POST /api/reconciliation` runs the deterministic end-to-end workflow.
+- Sample dataset now contains 60 merchant orders, 60 gateway settlement/payment rows, and 12 bank rows (132 source records total), with 58 clean exact matches, 11 reconciled settlement groups, and 6 seeded exception cases. A known-answer synthetic benchmark is returned and shown in the UI; its 100% precision/recall is fixture correctness only, not merchant or live-data evidence.
+- The previous IntentLock recovery API routes, domain/store modules, PostgreSQL files/dependencies, and old CSS were removed from active source. The ignored `.intentlock/store.json` user data has not been deleted; PayRecon does not read it.
+- Verified on 2026-10-02: lint/build pass after the multi-route redesign; all six regression tests pass; landing, login, icon, and signed-out route guard work; profile selection/switch/sign-out work; sample run reports 132 rows and expected seeded cases; review decision and same-tab refresh persistence work; one uploaded batch with a bank debit reconciles against only its valid credit; exception CSV download includes review outcome, note, reviewer, and timestamp columns. Browser download confirmation was verified by inspecting the generated file. These checks do not establish production readiness or real-merchant accuracy.
+- Current engine safeguards reject blank/malformed required amounts, preserve missing cost components as unknown (no false zero assumption), reject duplicate bank UTR matches as ambiguous, and prevent duplicate merchant purchase/payment identifiers from being used as unique matches. Bank parsing now requires clear credit semantics and excludes debit-only rows; grouping no longer repeatedly copies arrays and order-payment existence uses a set.
+- The product is a deterministic orchestrated workflow, not an LLM or trained model. Do not present it as AI reasoning unless a real model integration is implemented, configured, and verifiable.
 
 ## First actions on a continuation
 
-1. Read `README.md`, this file, and `AGENTS.md`. The Next.js-managed block in `AGENTS.md` is required; do not remove or replace it.
-2. Inspect `git status --short` before edits. Keep the current checkout and `.intentlock/store.json` data. Do not reset, delete, or overwrite user data to get clean demo states.
-3. Inspect current source rather than assuming that the descriptions below remain current. In particular read `src/lib/domain.ts`, `src/lib/store.ts`, API routes, and the relevant part of `src/app/page.tsx` for the task.
-4. If editing Next.js code, follow `AGENTS.md`: read the relevant installed Next.js guide under `node_modules/next/dist/docs/` first because this project uses Next.js 16 and APIs may differ from older examples.
-5. Make the smallest coherent changes that advance the active phase. Continue independent work without pausing for routine preferences. Ask only if a missing business or safety decision cannot be inferred.
+1. Read this file, `README.md`, and `AGENTS.md`. Preserve the Next.js-managed block in `AGENTS.md`.
+2. Inspect `git status --short` and the current source. Preserve the user’s work and ignored local data.
+3. Before editing Next.js, follow `AGENTS.md` and read the relevant installed guide under `node_modules/next/dist/docs/` (this repository uses Next.js 16).
+4. Make a focused change that advances the next product phase. Do not stop to ask routine questions; ask only for a truly blocking business choice, unavailable credential/data, or explicit authorization.
 
-## Product objective
+## Product truth and positioning
 
-IntentLock’s promise is **one purchase, one safe payment path—and a measured recovery attempt only when payment genuinely fails.** The local build simulates an IntentLock merchant console and shopper journey. The longer-term brief proposes an intent-level coordinator between merchant checkout and Razorpay: retain a stable merchant purchase reference, link all provider orders/attempts/events to it, reconcile provider state, and let a deterministic policy gate control any recovery action.
+PayRecon reconciles the merchant’s internal order/invoice ledger, a Razorpay settlement export, and the merchant bank statement. Razorpay already provides settlement reports and payment/settlement detail. PayRecon’s hypothesis is that operators still benefit from joining gateway output back to their own orders and bank credits, then seeing evidence-backed exceptions in one worklist. State this as a hypothesis to validate—not a proven universal pain or a claim that Razorpay reports are inadequate.
 
-This is a hypothesis to validate with merchants. Do not claim the broader market has a universal duplicate-payment problem or that IntentLock has proven incremental recovery. The supplied source brief is titled **IntentLock Recovery Agent Track: AI Revenue Recovery** and is referenced in `README.md`.
+Do not overstate the current supported inputs: the workflow accepts canonical CSV formats and some header aliases. Direct ingestion of every live Razorpay export version is not yet validated. The sample rows are synthetic. No live integration, accounting posting, refund, payment, external communication, or durable run history exists.
 
-## Critical safety rules
+## Critical invariants
 
-- The local provider is a **simulator**. Do not describe simulator events as signed webhooks, verified Razorpay events, live payment calls, real captures, or production behavior.
-- Never let a browser callback/customer message move an intent to `Paid` or make it retry-eligible. In a real integration, only authenticated provider evidence plus reconciliation may establish payment state.
-- Never allow a retry when an earlier attempt is unresolved. Retry requires a confirmed terminal failure, elapsed configured wait, and remaining retry budget.
-- Retry approval is not payment submission. Starting the retry and incrementing counters only occurs after explicit customer checkout submission.
-- Keep duplicate captures in `Review required`; do not send another fulfilment or automatically issue refunds.
-- Recommendations are advisory only. Do not make the scorer mutate payment state, submit checkout, refund, or contact a customer.
-- Fail closed on missing or conflicting evidence. Human review is appropriate for ambiguous/cross-order capture states.
-- All UI seed data, chart values, evaluation baselines, and amounts derived from simulator state are synthetic. Keep them labeled as simulated. Do not invent AI quality, success probabilities, ROI, revenue lift, or merchant adoption.
-- Current APIs have no authentication/authorization/tenant isolation and accept simulator-only state transitions. Do not expose them to the public internet or connect real payments without an explicit, separate security/product review.
-- Never put secrets or real payment credentials in source, browser code, prompts, logs, README, or `.env.example`. `.env.local` is ignored and must stay untracked.
+- Never auto-match by amount, name, or date alone. Primary identity is exact payment ID or purchase reference; settlement/bank identity is exact UTR.
+- Store/compare monetary values in integer paise internally. User-facing canonical CSV amounts are rupees. Be explicit when an input format uses a different unit.
+- Settlement arithmetic is `gross − fee − tax − refund/offset = reported net`, with a one-paise tolerance in the current implementation. Do not silently absorb larger differences.
+- Do not auto-correct conflicting IDs, fees, taxes, refunds, bank amounts, or ledger rows. Explain and cite source rows; leave decisions with a finance operator.
+- Keep a distinction between payment-to-order identity matching and settlement-to-bank payout matching. One settlement can contain multiple payment lines; aggregate net lines before comparing to a bank credit.
+- Watch for duplicate payment IDs, duplicate UTRs, duplicate export lines, multiple settlement groups sharing references, and bank duplicates. Never let `.find()` silently pick one when more than one candidate exists; report ambiguity.
+- Missing bank credit may be a date-window/timing issue, not lost money. No loss, fraud, overdue status, or overcharge claim without evidence and dates/policy.
+- Exception amount totals can double-count overlapping findings; label this clearly or change to a non-overlapping measure.
+- PayRecon’s agent may automatically parse, match, calculate, classify, explain, and prepare an export; it must not post a journal, modify source systems, move funds, issue refunds, or contact people.
+- Uploaded ledgers can contain sensitive finance/customer information. Current route processes in memory and does not persist the CSV, but it has no auth and is local-only. Do not expose it publicly or add external AI transmission without explicit scope and a privacy/data-flow design.
+- Do not present sample outputs, findings, values, model probabilities, accuracy, time saved, or ROI as real evidence.
 
-## Current code map
+## Code map
 
-- `src/app/page.tsx` — merchant console and shopper checkout/status overlays. It includes navigation, payment/recovery filters, payment detail and timeline, scenario simulator, policy settings, experiments, and audit UI.
-- `src/app/globals.css`, `src/app/overrides.css` — established visual design. Keep the polished Razorpay-inspired payments-operations layout and IntentLock brand. Do not copy proprietary logos/assets or make the UI imply it is Razorpay.
-- `src/app/layout.tsx` — shell and metadata.
-- `src/lib/domain.ts` — `Intent`, `Status`, `IntentEvent`, `LocalStore`, seed data, `decideRetry`, `decideAttemptStart`, `scoreRecoveryAction`, `hasProviderEvent`, `findReferenceIntent`, and `assertIntentInvariant`.
-- `src/lib/store.ts` — `DATABASE_URL` selects PostgreSQL; otherwise atomic local JSON. PostgreSQL currently uses one singleton JSONB aggregate row with a `FOR UPDATE` transaction lock, not normalized tables. PostgreSQL code has not yet been run against a real database.
-- `src/lib/evaluation.ts` — 11 deterministic checks that call shared domain helpers. Baseline counts 4 and 2 are fixed modeled comparisons, not measured data.
-- `src/app/api/intents/route.ts` — intent list and idempotent create.
-- `src/app/api/intents/[id]/actions/route.ts` — simulator transitions for `retry`, `attempt_started`, `failure`, `capture`, `delayed_capture`, and `duplicate_capture`.
-- `src/app/api/policies/route.ts` — policy GET/PUT.
-- `src/app/api/evaluation/route.ts` — scenario evaluation.
-- `src/app/api/health/route.ts` — storage health/mode/version.
-- `compose.yaml`, `.env.example` — local-only optional PostgreSQL.
+- `src/app/page.tsx` — PayRecon landing page and entry points.
+- `src/app/login/page.tsx` — local profile-selection sign-in.
+- `src/app/reconciliation/page.tsx` — workspace, uploads, run control, report tabs, exception filtering and decisions, export, templates, help and session menus.
+- `src/app/payrecon.css` — Razorpay-inspired blue/neutral dashboard styling and responsive behavior.
+- `src/app/site.css` — landing/sign-in styling plus dashboard type and decision-history styling.
+- `src/app/globals.css` — fonts and shared baseline.
+- `src/app/layout.tsx` — PayRecon metadata and global style imports.
+- `src/lib/reconciliation.ts` — demo fixtures, CSV parser, header aliases, normalization, exact ID matching, settlement arithmetic, UTR grouping, findings, workflow trace.
+- `src/app/api/reconciliation/route.ts` — accepts sample or three uploaded CSVs, 2 MB per-source limit, invokes workflow, serializes output/errors.
+- `README.md` — complete product brief, target architecture, schemas, setup, API, data/AI scope, limitations, roadmap.
+- `AGENTS.md` — Next.js rules and pointer to this handoff.
 
-## Current status and caveats
+## Next recommended work
 
-Implemented in local simulator: unique purchase reference behavior, canonical synthetic order, attempt/retry tracking, server-side retry gate, simulated failure and capture resolution, delayed capture, duplicate capture review, event-ID deduplication, policy versioning, shopper status polling, merchant console, CSV exports, deterministic recommendations, and scenario evaluation.
+Continue autonomously through the phases with concise progress updates; the user should not need to prompt after every phase. Prioritize completing a credible local product over adding speculative AI or live integration.
 
-Known unverified/incomplete items:
+1. Expand regression coverage for duplicate IDs, CSV quoting/BOM, rounding tolerance, exception evidence, and upload API limits/errors. Existing tests cover the no-amount-only-match invariant, invalid currency, repeated UTR, grouped payouts, credit/debit filtering, ambiguous bank input, and the sample benchmark.
+2. Actual three-file upload and reconciliation have been browser-verified with generated canonical CSVs (1/1 exact match and 1/1 settlement reconciled). Still verify malformed upload feedback, template download, and rerunning a different uploaded batch.
+3. Landing, sign-in, role switcher, workspace route and key controls have been browser-checked at desktop/mobile widths; continue checking edge cases and keyboard/accessibility behavior.
+4. Bank statement handling now excludes explicit debits and rejects ambiguous generic amount-only files. Validate more real-world credit/debit header conventions using redacted sample exports.
+5. Keep direct Razorpay native export compatibility explicitly unverified until tested against redacted real examples or authoritative sample files. Add mappings only when their meaning is clear.
+6. Add persistence only after choosing a safe retention model. Do not store full files by default; keep review actions and run provenance auditable if persistence is introduced.
+7. Leave AI, live Razorpay APIs, accounting posting, and merchant communications out of scope until the deterministic product is reliable and data/privacy requirements are defined.
+8. After meaningful changes, run lint/build and exercise sample plus uploaded input paths. Report what is verified versus still pending.
 
-- The latest verification showed `npm run lint` and `npm run build` pass in local JSON mode; evaluation returned 11/11. Re-run verification after edits.
-- Optional PostgreSQL has not been verified against a live DB; no Docker or `psql` was available during the previous session. Next recommended task is PostgreSQL end-to-end validation using `docker compose up -d db` if Docker exists.
-- PostgreSQL stores one aggregate JSONB row. Do not call it the final normalized production schema. Consider migration only with a clear need and a tested migration plan.
-- There is no live Razorpay SDK/API integration, signed webhook inbox, provider reconciliation request, Redis/BullMQ worker, authentication, merchant tenancy, customer messaging, refund action, or independently routable customer status URL.
-- The “recovery AI” is currently transparent rule-based priority logic. No trained model or appropriate merchant labels/outcomes exist.
-- There is no production or merchant pilot. Merchant discovery, shadow mode, security review, and measured pilot are future phases.
-- `.intentlock/store.json` has already been changed during manual browser/API scenario verification and contains persistent sample/test activity. Preserve it; do not assume seed data is untouched.
+## Later phases
 
-## Suggested sequence
+### Operator product completion
 
-### Phase A — Verify storage (next)
+- Give useful empty/loading/error states and verify at laptop and mobile widths.
+- Verify template downloads, actual CSV file uploads, error handling, exception filters, required review decision/note, decision log, report export, and rerunning a different batch.
+- Consider a source mapping step if actual Razorpay/bank column formats vary. Never guess silently; show resolved mappings to the operator.
+- Persist run IDs and review actions only after choosing a storage/retention model. Do not store full uploaded financial files by default.
 
-1. Check whether Docker is installed and running. If available, start Compose PostgreSQL. If not, report that clearly and continue with tests that do not require a DB.
-2. Verify schema bootstrap, initial state, create/update/read, policy persistence, app restart persistence, health success and failure, transaction rollback, and two concurrent updates. Confirm one version increment per successful mutation.
-3. Check DB startup retry behavior, pool lifecycle, local JSON fallback, and TypeScript/lint/build. Fix defects before expanding architecture.
-4. Do not migrate or delete existing `.intentlock` data. If a migration is proposed, back up and make it explicit/reversible.
+### Optional AI assistance
 
-### Phase B — Automated regression coverage
+The current chain is deterministic; that is deliberate for calculations and auditability. If a language model is added, it may summarize already-computed findings or prioritize a constrained set of safe review actions, but it must receive minimized evidence, return validated structured output, cite existing row/evidence IDs, and never supply calculations or create facts. Keep deterministic fallback if no key/network. Do not put keys in client code. Clearly disclose external data transfer and do not send real finance data without authorization.
 
-Add a focused test runner only after understanding the current package scripts and desired environment. Cover retry safety, attempt start, idempotent references, duplicate event IDs, policy versioning, late capture, duplicate capture/one-time fulfilment, storage adapter behavior, and rollback/concurrency where possible. Keep the visible scenario evaluation useful to operators, but do not confuse it with unit/integration tests.
+### Integrations and pilot
 
-### Phase C — Complete local shopper handoff
-
-If appropriate, turn the current modal into a separately routable customer status URL with a non-guessable token, expiry, minimal customer data, and read-only status semantics. Do not expose arbitrary intent records by guessable ID. Keep retry submission behind the same server state gate. Avoid adding authentication/security theatre; design and verify actual access controls.
-
-### Later, only with explicit prerequisites
-
-- Razorpay test-mode integration requires credentials, API order mapping, raw-body signature verification, deduplicated durable webhook inbox, state reconciliation via provider API, and safe idempotency.
-- Production state needs normalized tenant-aware intent/order/attempt/event/decision/action/outcome storage, actual DB uniqueness constraints, migrations, secret management, access control, observability, and disaster recovery.
-- AI ranking requires a constrained action schema, real governed labels/outcomes, leakage-resistant split by merchant/time/scenario, safe baseline comparisons, calibration and safety metrics. Until then, retain the honest rule baseline.
-- Shadow mode/pilot requires real merchant agreement/data, explicit review and security approval, a safe rollout and rollback plan, and real outcome measurement. Never manufacture revenue data.
+Real Razorpay import, bank integrations, normalized persistence, authentication, multi-tenant access, and accounting exports are out of scope until requirements and credentials/data are available. A pilot needs merchant interviews, redacted samples, privacy/security review, shadow validation, explicit user approvals for any external action, rollback, and measurement. First establish exception precision and time saved; do not claim improved finance outcomes from the synthetic sample.
 
 ## Verification workflow
 
-For changes affecting code, run and report the checks that matter:
+Commands:
 
 ```bash
 npm run lint
+npm test
 npm run build
 ```
 
-For functional changes, exercise relevant API/UI flows as well. At minimum preserve these invariants:
+Exercise `POST /api/reconciliation` with `{ "sample": true }`; expected sample counts are documented above. Also upload generated template files with populated sample rows through the UI/API and verify report/export. If a check cannot run, report exactly why. A passing build does not prove matching correctness.
 
-1. A pending intent cannot be retried.
-2. Failure evidence must exist; wait window and budget are rechecked server-side.
-3. Approval alone does not increment attempts; checkout submission does.
-4. A delayed capture resolves the same purchase and prevents an unsafe second path.
-5. Duplicate provider events do not apply twice.
-6. Multiple captures require review and do not cause a second fulfilment/refund.
-7. Repeating the same purchase reference/amount does not create another intent; amount mismatch conflicts.
-8. Policy/evaluation numbers are explicitly identified as synthetic/modeled.
-
-If PostgreSQL is unavailable, do not claim PostgreSQL tests passed: report local JSON verification separately and leave PostgreSQL runtime verification open. Never silently skip a failed command or report a build as passing if output is incomplete.
-
-## Working style and handoff
-
-- Inspect before editing; do not rewrite working surfaces wholesale when a focused change will do.
-- Keep the README accurate whenever architecture, route behavior, setup, or limitations change.
-- Avoid adding unrelated integrations, dependencies, UI rebrands, fake analytics, or model claims.
-- Preserve all existing local state unless the user specifically requests a reset.
-- Complete a coherent phase before reporting. A passing build alone does not mean a product phase is complete.
-- The user prefers minimal wait and wants the agent to continue through phases without requiring a fresh prompt after each one. Ask only for decisions that materially change scope, require unavailable credentials/data, or need explicit authorization.
-- Final progress reports should distinguish verified behavior, implemented-but-unverified behavior, and future work. Mention any tests not run and why.
+When reporting progress, distinguish implemented, verified, implemented-but-unverified, and future work. Preserve the new PayRecon scope, the honest market hypothesis, and the explicit no-auto-posting boundary.

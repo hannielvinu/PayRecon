@@ -34,14 +34,14 @@ Initial target: one online merchant using Razorpay Checkout/Orders with a stable
 5. **Checks settlement arithmetic** using `gross − fee − tax − refund/offset = reported net` with a one-paise rounding tolerance.
 6. **Groups settlement lines** by UTR (or settlement ID if UTR is absent), sums reported net credits, and matches to bank statements using exact UTR plus amount.
 7. **Diagnoses exceptions** with source-row references, amounts and IDs that support the finding, and a suggested review step.
-8. **Prepares a worklist** and provides a downloadable exception CSV. A user can mark findings reviewed in the current browser session.
+8. **Prepares a worklist** and provides a downloadable exception CSV. A reviewer records a decision (resolved after verification, timing difference, escalation, or not an issue) with a required note. The decision stores reviewer and timestamp, appears in the activity log, and is included in the export. Decisions can be reopened. They are held in the current browser tab session only.
 
 The agent does not post journal entries, modify the merchant’s books, transfer money, issue refunds, or contact Razorpay or customers. A suggested action is for a human to review. No match is based only on amount, name, or date.
 
 ## Current product scope and truth in labeling
 
 - Product name in the UI and package: **PayRecon**. It is not a Razorpay product and does not use Razorpay branding assets.
-- The operator dashboard uses a Razorpay-inspired blue, white, and neutral visual system; PayRecon branding remains distinct.
+- The public landing page, local profile-selection sign-in, and reconciliation workspace use a Razorpay-inspired blue, white, and neutral visual system; PayRecon branding remains distinct and uses its own SVG mark and browser icon. The login is a local prototype profile selector, not production authentication, and the two profiles do not enforce real authorization boundaries.
 - The current agent is an **orchestrated deterministic workflow**, not an LLM or trained reconciliation model. Each step calls local parsing/matching/diagnosis code. Arithmetic and identity matching are deterministic and explainable.
 - The workflow is end to end for the three canonical CSV schemas documented below. The parser has basic header aliases, but direct support for every current Razorpay export version is not verified. Use the included templates or adapt the header map after testing against real redacted exports.
 - CSV contents are sent from the browser to the local Next.js API for processing. The report is held in page state for the current session; runs are not yet persisted to a database or durable audit log.
@@ -64,11 +64,14 @@ flowchart LR
   Report --> UI
 ```
 
-The current run is stateless: the route processes the request and returns a report. It does not persist the uploaded files or report. No credentials are required. The UI includes sample data and template download for a reproducible local walkthrough.
+The reconciliation API processes each request in memory and returns a report. Raw uploaded CSVs are not saved. The current report and review decisions are kept in `sessionStorage` so refreshes in the same tab session retain the work; closing the browser session or signing out clears it. There is no durable run history or database yet. Sign-in is a browser session profile selector for the local prototype only; it is not a security boundary. No credentials are required. The UI includes sample data and template download for a reproducible local walkthrough.
 
 ### Main source files
 
-- `src/app/page.tsx` — PayRecon workspace, working source shortcuts and CSV upload cards, sample/upload runs, help and account menus, agent trace, summary, matched lines, exception search/filter/review, reset, templates, and CSV export.
+- `src/app/page.tsx` — PayRecon public landing page, product explanation, and entry points.
+- `src/app/login/page.tsx` — local profile-selection sign-in screen; uses browser session state, not production authentication.
+- `src/app/reconciliation/page.tsx` — PayRecon workspace, working source shortcuts and CSV upload cards, sample/upload runs, help and account menus, agent trace, summary, matched lines, exception search/filter, reviewer decision dialog/activity, session restore, reset, templates, and CSV export.
+- `src/app/icon.svg` — original PayRecon browser icon; the header and sign-in use the same custom mark.
 - `src/app/payrecon.css` — PayRecon visual system and responsive layouts.
 - `src/app/globals.css` — shared font and baseline styles.
 - `src/app/layout.tsx` — page shell and PayRecon metadata.
@@ -135,9 +138,9 @@ utr,description,credit_rupees,transaction_date
 UTR-884201,RAZORPAY SETTLEMENT setl_001,11716.80,2026-09-30
 ```
 
-Recognized reference aliases include `utr`, `utr_number`, `bank_reference`, `reference`, and `transaction_reference`; descriptions include `description`, `narration`, `particulars`, and `remarks`; amount aliases include `credit_rupees`, `deposit_rupees`, `credit`, `deposit`, `amount_rupees`, and `amount`.
+Recognized reference aliases include `utr`, `utr_number`, `bank_reference`, `reference`, and `transaction_reference`; descriptions include `description`, `narration`, `particulars`, and `remarks`; credit aliases include `credit_rupees`, `deposit_rupees`, `credit`, `deposit`, `credit_amount_rupees`, and `credit_amount`. Debit-only rows are excluded. If a file only has a generic amount column, include a transaction-type or debit/credit column so PayRecon can determine whether the row is an incoming credit. It rejects ambiguous generic amount-only statements rather than treating debits as payouts.
 
-Download all three empty templates from the app’s **Download CSV templates** button. The “Run sample” button uses built-in synthetic data with a reconciled batch, a net arithmetic discrepancy, an order missing from the gateway export, a settlement with no bank credit, an orphan gateway payment, and an unrelated bank credit.
+Download all three empty templates from the app’s **Download CSV templates** button. The “Run sample” button uses 132 generated source records: 60 merchant orders, 60 gateway rows, and 12 bank rows. It includes grouped payouts, a gross conflict, a net arithmetic discrepancy, a missing payment row, an orphan gateway row, a missing bank credit, and an unrelated bank credit. The sample response includes known-answer precision/recall and exception counts for this generated fixture. These are not independent model metrics, real-merchant evidence, or proof of production accuracy.
 
 ## Local setup and use
 
@@ -148,13 +151,14 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), choose **Run sample** to inspect a complete workflow, or add all three CSVs and select **Run reconciliation**. Review the ledger bridge and agent trace, inspect findings in the exception worklist, mark findings reviewed, and export the CSV. “Reviewed” marks are browser-session-only and do not alter source data.
+Open [http://localhost:3000](http://localhost:3000), choose **Open local workspace**, select a local team profile, then choose **Run sample** to inspect a complete workflow or add all three CSVs and select **Run reconciliation**. Review the ledger bridge and agent trace, inspect findings in the exception worklist, record a decision with a note, and export the CSV. Review decisions survive a same-tab refresh but remain local session state and do not alter source data. The profile switch changes the displayed local role; it is not an authorization control.
 
 Commands:
 
 ```bash
 npm run dev     # local development server
 npm run lint    # ESLint
+npm test        # deterministic reconciliation regression tests
 npm run build   # production build
 npm run start   # serve a production build
 ```
@@ -180,7 +184,7 @@ For uploads, send JSON containing three CSV strings and optional source names:
 }
 ```
 
-Successful response includes `generatedAt`, `mode`, source names, summary counts, six workflow steps, findings with evidence/recommended action, and exact matched rows. Bad CSV or missing columns return HTTP 400 with an error; each source is limited to 2 MB of text. This endpoint has no authentication and is intended for local demo use only.
+Successful response includes `generatedAt`, `mode`, source names, summary counts, six workflow steps, findings with evidence/recommended action, and exact matched rows. A sample-mode response also includes `benchmark`, which measures results against labels built into its own known-answer synthetic fixture. Uploaded batches do not claim accuracy without external ground truth. Bad CSV or missing columns return HTTP 400 with an error; each source is limited to 2 MB of text. This endpoint has no authentication and is intended for local use only.
 
 ## Security and privacy boundaries
 
@@ -194,11 +198,25 @@ Successful response includes `generatedAt`, `mode`, source names, summary counts
 
 1. **Problem and product framing — implemented, validation pending:** PayRecon targets exception-first reconciliation across merchant orders, Razorpay settlement lines, and bank credits. The recurring manual pain is a product hypothesis to validate with finance operators.
 2. **Local end-to-end workflow — implemented and browser-verified:** CSV ingestion, normalization, exact-ID matching, settlement/UTR reconciliation, evidence-backed findings, trace, and export run locally. A populated three-file upload was run through the browser on 2026-10-02.
-3. **Operator interface — redesigned and browser-verified at desktop width:** Razorpay-inspired palette and legible typography; working source upload shortcuts, sample/upload runs, help, session menu/reset, summaries, workflow trace, exception search/filter/review, and export. Mobile and deeper accessibility review remain open.
-4. **Matching safeguards — core cases implemented; broader validation pending:** duplicate bank UTRs and duplicate merchant IDs are treated as ambiguous; incomplete fee/tax/refund data does not get treated as zero. Test additional bank debit/credit formats, reporting windows, currencies, reversals, partial settlements, and native exports before claiming broad compatibility.
+3. **Operator interface — implemented and browser-verified:** Public landing page, local profile-selection sign-in, responsive Razorpay-inspired workspace, original brand mark and browser icon, role/profile switcher, protected workspace entry, working tabs and actions, required outcome/note review dialog, reviewer decision/reopen history, session restore, and CSV export. Desktop and 390px mobile widths were inspected.
+4. **Matching safeguards and batch evaluation — core paths implemented; broader validation pending:** Duplicate bank UTRs and duplicate merchant IDs are treated as ambiguous; incomplete fee/tax/refund data does not get treated as zero; explicit bank credits are used and debit-only rows are excluded; generic amount-only statements are rejected. The sample contains 132 records with six seeded issue categories and known-answer metrics. The fixture is not independent evidence. Test additional bank formats, periods, currencies, reversals, partial settlements, and native exports before claiming broad compatibility.
 5. **Optional AI assistance — not implemented:** deterministic calculations and identity matching remain authoritative. A future model may only summarize computed findings or prioritize a constrained review queue, with cited evidence and deterministic fallback.
 6. **Persistence, integrations, production security — not implemented:** no durable run history, Razorpay/bank connector, authentication, tenant isolation, or accounting posting. Define access and retention controls before handling real merchant data in a hosted service.
 7. **Merchant validation/pilot — not started:** interview operators, obtain redacted exports, shadow-review findings, measure exception quality/time-to-close, and run a consented pilot before making outcome claims.
+
+## Buildathon readiness assessment
+
+Razorpay's published AI Buildathon brief for **AI Finance Controller** calls for a finance-operations loop over 50+ synthetic records, with match rate and unresolved exceptions; its stated bar is throughput, measured accuracy, and an honest exception list. It also describes evaluation around problem taste, build quality, AI judgment, and failure recovery. PayRecon now demonstrates the batch size, a known-answer fixture, explicit exceptions, and guarded failure cases. The fixture is self-authored and cannot establish real-world accuracy. [Razorpay AI Buildathon brief](https://razorpay.com/buildathon/)
+
+**This is not a guaranteed selection or a full-score claim.** Current readiness is strongest in a working, reviewable finance workflow and transparent boundaries. The largest gaps are that the product currently uses deterministic code rather than meaningful AI, has no measured operator time saved, has not been validated on redacted merchant exports, and overlaps a category where Razorpay itself already offers reconciliation products, including Razorpay Recon for offline payments. A judge could reasonably see it as a useful prototype but ask what distinctive value it adds. The next score-critical work is: [Razorpay Recon announcement](https://razorpay.com/newsroom/razorpay-pos-launches-industry-first-ai-powered-razorpay-recon-to-automate-reconciliation-for-businesses-boosting-financial-operations-efficiency-by-80/)
+
+1. Validate the exact reconciliation pain and differentiator with finance operators, then narrow the pitch to a specific recurring exception they cannot handle efficiently today.
+2. Test against representative, redacted exports and an independently labeled holdout set; publish false-positive and false-negative counts, not only the generated fixture benchmark.
+3. Add a bounded, optional AI step that contributes a distinct operator benefit (for example, evidence-grounded exception triage or a cited investigation brief). Keep amounts, identity matching, and decisions deterministic; validate every model reference against existing evidence and retain a no-model fallback. Never transmit real finance files to a model until the operator explicitly configures and approves that data flow.
+4. Capture a complete failure-and-recovery demo: malformed source, ambiguous duplicate UTR, correction/re-upload, human review, reopen, and final export. Report throughput on realistic batch sizes before making speed or scale claims.
+5. Package a public repository, a short end-to-end pitch, architecture/data-flow diagram, and a candid “what broke and how it was fixed” story if submitting to a buildathon.
+
+The product is currently best described as an **auditable deterministic reconciliation agent workflow with synthetic evaluation**, not an AI-powered finance controller. The gap above needs actual evidence and implementation; stronger copy cannot substitute for it.
 
 ## Future roadmap
 
