@@ -78,3 +78,23 @@ test("parses UTF-8 BOM, quoted commas, and multiline CSV fields", () => {
   assert.equal(report.summary.matchedOrderCount, 1);
   assert.equal(report.summary.reconciledSettlementCount, 1);
 });
+
+test("processes a 5,000-order synthetic batch with grouped payouts", () => {
+  const orderLines = ["purchase_ref,payment_id,amount_rupees"];
+  const settlementLines = ["payment_id,purchase_ref,settlement_id,utr,gross_amount_rupees,fee_rupees,tax_rupees,refund_rupees,net_amount_rupees"];
+  const payouts = new Map<number, number>();
+  for (let index = 0; index < 5000; index++) {
+    const number = index + 1;
+    const payout = Math.floor(index / 5) + 1;
+    orderLines.push(`ORD-${number},pay-${number},100.00`);
+    settlementLines.push(`pay-${number},ORD-${number},setl-${payout},UTR-${payout},100.00,2.00,0.36,0,97.64`);
+    payouts.set(payout, (payouts.get(payout) || 0) + 9764);
+  }
+  const bankLines = ["utr,description,credit_rupees", ...[...payouts].map(([payout, paise]) => `UTR-${payout},RAZORPAY,${(paise / 100).toFixed(2)}`)];
+  const report = runReconciliation({ ordersCsv: orderLines.join("\n"), settlementsCsv: settlementLines.join("\n"), bankCsv: bankLines.join("\n") });
+  assert.equal(report.summary.orderCount, 5000);
+  assert.equal(report.summary.matchedOrderCount, 5000);
+  assert.equal(report.summary.settlementCount, 1000);
+  assert.equal(report.summary.reconciledSettlementCount, 1000);
+  assert.equal(report.summary.exceptionCount, 0);
+});
